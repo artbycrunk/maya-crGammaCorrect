@@ -1,0 +1,229 @@
+/**********************************
+***********************************
+
+Gamma Corrector 1.5b
+
+//Created On : Feb 27th 2009
+//Last Updated : Aug 07th 2011
+//Authored By - Crunk AKA Savio Fernandes
+
+//Install & Execute:
+-Copy this file to your maya default script directory
+-Source "crGammaCorrect.mel"
+
+//Usage :
+
+1. Input the Gamma that u want to minus.
+2. Select the File Node that u want to add the gamma correction on.
+3. Select the type of gamma Shader that u want to use.
+4. Click Update Selected.
+
+//Link To Page
+http://www.artbycrunk.com/script/maya/scripts-crgammacorrect/
+
+// Copyright (c) 2011 artbycrunk.com <artbycrunk@gmail.com>
+// Released under GPL v3
+
+***********************************
+UPDATES
+
+May 01 2010 - Ver 1.5b - Fixed Bug where script freaked on Maya 2011 :)
+                         Now added a toggle between Maya and Mental Ray Gamma Correction.
+                         Rebuilt some part of the script to be faster also added error checking.
+Apr 19 2010 - Ver 1.5  - Creates a New Master Gamma Attribute on the GammaCorrect Node.
+                         Added Some error Checking so now it only applies gamma correction
+                         on connected FileNodes only. Filenodes without connections are ignored.
+Apr 13 2010 - Ver 1.4  - Made To now work on Selected or All FileNodes in Current Scene.
+Jun 07 2009 - Ver 1.3  - Made UI changes to support MR gamma control shader.
+                         Now supports Multiple GammNode Create or Remove.
+Feb 27 2009 - Ver 1.0  - Created the GammaCorrect for a non-linear workflow.                    
+                       
+***********************************/
+
+////////////////////////////////////////////////
+//Function - Creates UI with commands.
+////////////////////////////////////////////////
+global proc crGammaCorrect()
+{
+	string $ver = "1.5b";
+	
+	if (`window -q -ex GCWin`) deleteUI GCWin;
+	window -title ("crGammaCorrect "+$ver) -wh 280 146 -s 1 GCWin ;
+	columnLayout -adjustableColumn true;
+   
+	floatFieldGrp -l "Gamma:" -v1 2.2 -nf 1 GCgammaValue;
+	separator;
+	radioButtonGrp -numberOfRadioButtons 2 -cw 1 50 -label "MODE" -labelArray2 "Selected" "All" -sl 1 crGammaSelectionRB;
+	separator;
+	radioButtonGrp -numberOfRadioButtons 2 -cw 1 50 -label "TYPE"  -labelArray2 "gammaCorrect" "mip_gamma_gain"  -sl 1 crGammaRB;
+	separator;
+	button -l "Update Gamma" -c "GCgamma_update(1)";
+	button -l "Remove Gamma" -c "GCgamma_update(0)";
+
+	window -e -wh 280 146 -s true GCWin ;    
+	showWindow GCWin;
+}
+
+////////////////////////////////////////////////
+//Function - Updates gamma based on selected Mode.
+////////////////////////////////////////////////
+global proc GCgamma_update(int $mode) {
+
+string $nodeType,$gammaNode,$connections[],$connections2[];
+
+string $selNodes[]; clear $selNodes;
+string $attrList[] = { "gammaX", "gammaY", "gammaZ"};
+string $CreateGammaNode[] = { "", "gammaCorrect", "mip_gamma_gain"};
+
+   if(`radioButtonGrp -q -sl crGammaSelectionRB` == 2){
+       $selNodes = `ls -type file`;
+   }else{
+       $selNodes = `ls -sl -type file -type gammaCorrect -type mip_gamma_gain`;
+   }
+   
+   float $gamma = `floatFieldGrp -q -v1 GCgammaValue`;
+   float $gammaValue = (float(1)/$gamma);
+   int $type = `radioButtonGrp -q -sl crGammaRB`; // 1 = gammaCorrect, 2 = mip_gamma_gain
+   
+   for ($node in $selNodes) {
+           //print ($node+"\n");
+           $gammaNode = "";
+           clear $connections;
+           int $skip = 0;
+           
+           //Check if Selected File Connections has GammaNode.
+           if( `objectType $node` == "file"){
+                   $connections = `listConnections -p 1 ($node+".outColor")`;
+                       if(size($connections)){
+                       if ( `objectType $connections[0]` == "gammaCorrect" || `objectType $connections[0]` == "mip_gamma_gain") {
+                           $connections = `listConnections ($node+".outColor")`;
+                           $gammaNode = $connections[0];
+                           }
+                       }else{$skip = 1;}
+                   }
+                   
+           //Check if Selected is a GammaNode.                
+           if( `objectType $node` == "gammaCorrect" || `objectType $node` == "mip_gamma_gain" ) $gammaNode = $node;
+           
+           //If None above then Set GammaNode to FileNode.        
+           if($gammaNode == "") $gammaNode = $node;        
+           $nodeType = `objectType $gammaNode`;
+           
+           
+           if($skip == 0){
+               if($mode == 1){
+                   
+                   //Toggle if Current Node is different From Node to be Created.
+                   if( $nodeType == "gammaCorrect" || $nodeType == "mip_gamma_gain" )
+                   {
+                        if ($nodeType != ($CreateGammaNode[$type]))
+                        {
+                            string $buffer[];
+                            string $newConn[] = GCgamma_remove($node,$gammaNode);
+                           // $gammaNode = $newConn[1];
+                            $numTokens = `tokenize $newConn[1] "." $buffer`;
+                            $gammaNode = $buffer[0];
+							
+                            $connections = `listConnections -p 1 ($gammaNode+".outColor")`;
+                            $gammaNode = GCgamma_add($type,$gammaNode,$connections[0]);
+                             
+                        }
+                   }
+                   
+                   //If node doesnt exist then Create a new Node.
+                   if  ( $nodeType != "gammaCorrect" && $nodeType != "mip_gamma_gain" ) {
+                           //Create GammaCorrect Shader since it doesnt Exist.  
+                           $gammaNode = GCgamma_add($type,$node,$connections[0]);
+                   }
+                   
+                   //If node exist Update Values.
+                   if ($type == 1) //gammaCorrect (Maya Shader)
+                           {
+                               if (!`attributeExists "Gamma" $gammaNode`)
+                                   {
+                                   //Add MasterGamma Control.
+                                   addAttr -ln "Gamma" -at double $gammaNode;
+                                   setAttr -e -keyable true ($gammaNode+".Gamma");
+                                       for ($attr in $attrList)
+                                       {
+                                       connectAttr -f ($gammaNode+".Gamma") ($gammaNode + "." + $attr);
+                                       }
+                                   }
+                                   setAttr ($gammaNode+".Gamma") $gammaValue ;
+                           }else{    setAttr ($gammaNode + ".gamma" ) $gamma; }
+               }else{
+                   GCgamma_remove($node,$gammaNode);
+                   }
+           }         
+   
+   }
+}
+
+////////////////////////////////////////////////
+//Function - Add Gamma Node
+////////////////////////////////////////////////
+global proc string GCgamma_add(int $type, string $node, string $connection) {
+
+string $CrgammaNode ="";
+string $attrList[] = {"gammaX","gammaY","gammaZ"};
+string $CreateGammaNode[] = {"","gammaCorrect", "mip_gamma_gain"};
+
+   $CrgammaNode = `shadingNode -asUtility ($CreateGammaNode[$type])`;
+
+   if($type == 1){ //gammaCorrect (Maya Shader)
+       //Add MasterGamma Control.
+       addAttr -ln "Gamma" -at double $CrgammaNode;
+       setAttr -e -keyable true ($CrgammaNode+".Gamma");
+       for ($attr in $attrList)
+           {
+           connectAttr -f ($CrgammaNode+".Gamma") ($CrgammaNode + "." + $attr);
+           }
+       //Connect to required Input Output.
+       connectAttr -force ($node+".outColor") ($CrgammaNode+".value");
+       connectAttr -force ($CrgammaNode+".outValue") ($connection);
+               
+   }else{    //mip_gamma_gain (MR Shader)
+   
+       //Connect to required Input Output.
+       connectAttr -force ($node+".outColor") ($CrgammaNode+".input");
+       connectAttr -force ($CrgammaNode+".outValue") ($connection);
+   }
+   return $CrgammaNode;
+
+
+}
+
+////////////////////////////////////////////////
+//Function - Add Remove Node
+////////////////////////////////////////////////
+global proc string[] GCgamma_remove(string $node, string $gammaNode) {
+
+string $connections[],$connections2[];
+string $connections[];clear $connections;
+
+
+   if ( `objectType $gammaNode` == "gammaCorrect"){
+           $connections = `listConnections -p 1 ($gammaNode+".outValue")`;
+           $connections2 = `listConnections -p 1 ($gammaNode+".value")`;
+       }
+   if ( `objectType $gammaNode` == "mip_gamma_gain"){    
+           $connections = `listConnections -p 1 ($gammaNode+".outValue")`;
+           $connections2 = `listConnections -p 1 ($gammaNode+".input")`;
+       }
+   if(`objectType $gammaNode` != "file")
+   {
+       if( `objectType $node` == "file"){
+               connectAttr -force ($node+".outColor") ($connections[0]);
+       }else{    
+               connectAttr -force ($connections2[0]) ($connections[0]);
+       }
+       delete $gammaNode;
+   }
+   
+   $connections[0] = $connections[0];
+   $connections[1] = $connections2[0];
+   return $connections;
+}
+
+
+crGammaCorrect;
